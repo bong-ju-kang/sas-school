@@ -1,0 +1,648 @@
+!pip install sasctl
+
+# 필요한 패키지
+import swat, os
+import sasctl.pzmm as pzmm
+from sasctl.core import PagedList
+from sasctl import tasks, get, get_link, request_link, Session
+from sasctl.tasks import register_model, publish_model, update_model_performance
+from sasctl.services import model_repository as mr
+from sasctl.services import model_management as mm
+from sasctl.services import files
+from sasctl.services import folders
+from sasctl import Session
+
+import pickle
+import json
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+# 접속하기
+user = 
+password = 
+server = 
+port = 
+
+s = Session(server, user, password, verify_ssl=False)
+conn = s.as_swat()
+
+
+
+# 카스 클래스
+type(conn)
+
+# CASResults 클래스의 정체
+isinstance(r, dict)
+
+[[key, type(value)] for key, value in r.items()]
+
+for key, value in r.items():
+    print(key, type(value))
+	
+# SASDataFrame?
+isinstance(r['nodestatus'], swat.SASDataFrame), isinstance(r['nodestatus'], pd.DataFrame)
+
+# 카스 라이브러리
+r = conn.table.caslibinfo()
+r
+
+# 활동 라이브러리를 지정해주기
+conn.sessionProp.setSessOpt(caslib='casuser')
+
+# 다른 라이브러리 조회
+conn.table.tableinfo(caslib='Public')
+
+# 데이터 읽기: hmeq
+url = "https://github.com/bong-ju-kang/data/raw/master/hmeq.csv"
+conn.read_csv(url)
+
+# 파일을 올린 후 적절히 분석하여 테이블로 만듬
+conn.upload_file(url, casout={'replace':True})
+
+# 데이터 이름 명시
+conn.read_csv(url, casout={'name': 'hmeq', 'replace':True})
+
+# 카스 테이블 인터페이스
+df = conn.CASTable('hmeq')
+df.shape
+
+# 카스테이블 클래스
+type(df)
+
+# 그럼에도 불구하고 판다스의 많은 메서드를 동일하게 사용가능. 단, 출력결과 주의
+df.dtypes
+
+df.info()
+
+df.describe()
+
+df.columninfo()
+
+df.nmiss()
+
+df.fetch(to=5)
+
+# 서버 대 인터페이스 테이블 차이
+df.pop('BAD')
+df.columns
+
+conn.CASTable('hmeq').columns
+
+df = conn.CASTable('hmeq')
+
+# 숫자형 변수에 대한 간단한 요약
+# df[df.columns[df.dtypes == 'double']].summary()
+# df.select_dtypes('double').summary()
+df.summary()
+
+# 판다스 기반 그림도 거의 동일하게 적용
+fig, ax = plt.subplots(dpi=200)
+df['LOAN'].hist(ax=ax)
+plt.show()
+
+# 액션셋 = 패키지 또는 모듈
+conn.actionsetinfo()
+
+# 액션셋만 추출
+conn.actionSetInfo()['setinfo']['actionset'].unique()
+
+# 카스클래스에 붙는 경우
+conn.builtins.actionsetinfo()
+
+# table 액션셋의 액션들
+conn.help(actionset='table')
+
+# 카스테이블 지정
+df = conn.CASTable('hmeq')
+
+df.summary()['Summary'][['Column', 'NMiss']]
+
+conn.loadactionset('datasciencepilot')
+
+# 액션 확인
+conn.help(actionset='dataSciencePilot')
+
+# 데이터 탐색 액션(exploreData) in dataSciencePilot
+df.exploreData(
+    casout={'name': 'explore_out', 'replace': True}, 
+    target = 'BAD'
+)
+
+conn.CASTable('explore_out').head(999)
+
+# 집합크기 계산: 기준값(32, 64)
+df['LOAN'].nunique() > 64
+
+df.info()
+
+# 결측값 확인
+df.nmiss()/len(df)
+
+# 결측값 영향도
+df.analyzeMissingPatterns(
+    casout={'replace':True, 'name':'hmeq_missing'}, 
+    target = 'BAD'
+)
+
+conn.CASTable('hmeq_missing').head(999)
+
+# 변수 1차 스크리닝
+df.screenVariables(
+    casout={'name':'screen_out', 'replace':True}, 
+    target = 'BAD'
+)
+
+# 결과 확인
+scrout = conn.CASTable('screen_out')
+scrout.head(999)
+
+# x 변수 리스트 구성
+xvars = scrout[scrout['Recommendation']=='keep']['Variable']
+xvars = pd.Series(xvars).tolist()
+xvars
+
+# 일반적인 방법
+target = 'BAD'
+xvars = [x for x in df.columns.tolist() if x not in ['BAD']]
+print(xvars)
+
+# 목표변수 및 범주 변수 정의
+target = 'BAD'
+event = '1'
+cats = [x for x in df.select_dtypes('varchar').columns.tolist() if x in xvars]
+cats
+
+# 연속변수 정의
+nums = list(set(xvars)-set(cats))
+nums
+
+# sampling actionset 적재
+conn.loadactionset('sampling')
+
+# 데이터 분할
+conn.sampling.stratified(
+    # 데이터 대상
+    table = {'name':df, 'groupby':target},
+    # 비율 지정
+    samppct = 70, 
+    # 분할 변수 출력 여부 결정
+    partInd = True,
+    # 출력 테이블 지정
+    output = {'casout':{'name':'hmeq_part', 'replace':True}, 'copyVars':"ALL"}
+)
+
+# 훈련 데이터 지정
+# train = conn.CASTable('hmeq_part', where='_PartInd_=1').drop('_PartInd_', axis=1)
+train = conn.CASTable('hmeq_part', where='_PartInd_=1')
+train.shape
+
+# 상관관계 분석: 상호정보
+train.exploreCorrelation (
+    casout={'name':'corr_out', 'replace':True},
+    target=target,
+    inputs=xvars,
+    nominals=cats
+)
+
+# 결과 확인: 특정 통계량값 기준 내림 차순 정렬
+conn.CASTable('corr_out').sort_values('MI', ascending=False).head(999)
+
+# 적절한 기준을 변수 선택하기
+train.selectFeatures(
+    casout={'name':'selft_out', 'replace':True},
+    target=target,
+    inputs=xvars,
+    nominals=cats,
+    selectionPolicy={'criterion':"MI"} # 기본
+)
+
+# 파이프라인: 결측값 처리 예
+df.dataSciencePilot.featureMachine(
+    target='BAD',
+    copyvars =['BAD', 'LOAN'],
+    
+    # 출력 데이터
+    casout={"caslib":"casuser",
+            "name":"feature_out",         
+            "replace":True},
+
+    # 변환 규칙 데이터
+    transformationOut={"caslib":"casuser",
+                       "name":"trans_info_out",         
+                       "replace":True},
+    
+    # 출력 변수(특징) 설명
+    featureOut={"caslib":"casuser",
+                "name":"feature_info_out",         
+                "replace":True},  
+    
+    # 변환 모델 저장
+    saveState={"caslib":"casuser",
+               "name":"feature_astore",
+               "replace":True},
+    
+ 
+    # 탐색 정책 초모수 정의
+    explorationPolicy={
+        "missing":{"lowMediumCutoff":3, 
+                   "mediumHighCutoff":10},
+    },
+    
+    # 변수선별 정책 초모수 정의
+    screenPolicy={
+        "lowMutualInformation":0.5,
+        "missingPercentThreshold":10,
+    },
+
+    
+    # 변환 정책 적용 여부 정의
+    transformationPolicy={"cardinality":False,
+                          "entropy":False,
+                          "interaction":False,
+                          "iqv":False,
+                          "kurtosis":False,
+                          "missing":True,
+                          "outlier":False,
+                          "polynomial":False,
+                          "skewness":False}
+)
+
+conn.CASTable('feature_info_out').head(999)
+
+# 결측값 처리 대상 보기
+train.nmiss()
+
+# 결측값 처리
+train.dataPreprocess.impute(
+    
+    # 결측값 처리 방식
+    methodInterval='mean',
+    methodNominal = 'mode',
+    
+    # 처리 변수
+    inputs = xvars,
+    
+    # 결과 테이블
+    casout={'name':'train_impute_out', 'replace':True}, 
+
+    # 복사 변수
+    copyVars = target,
+    
+    # 모델 저장
+    code = {'casout':{'name':'impute_code', 'replace':True}} 
+    
+)
+
+# 결과 확인
+conn.CASTable('train_impute_out').head()
+
+# 모델 확인
+conn.CASTable('impute_code').head()
+
+# 모델 저장
+conn.table.save(
+    # 대상
+    table='impute_code',
+    # 저장명...
+    name='impute_code', caslib='casuser', replace=True
+)
+
+# 저장 모델 확인
+conn.fileinfo()
+
+# 모델 호출: source to memory
+conn.table.loadtable(
+    # 대상 정의
+    path = 'impute_code.sashdat', caslib='casuser',
+    # 목적지 정의
+    casout={'name': 'impute_code', 'replace':True}
+)
+
+# datastep 적재
+conn.loadactionset('datastep')
+
+# 결측값 처리: 모든 데이터
+conn.dataStep.runCodeTable(
+    # 대상
+    table = 'hmeq_part',
+    #  출력
+    casout={'name':'hmeq_part_impute'},
+    # 변수
+    dropvars = xvars,
+    # 모델 테이블
+    codeTable = 'impute_code'
+)
+
+# 결과 테이블 확인
+conn.CASTable('hmeq_part_impute').nmiss()
+
+# 변수 재 정의
+imp_xvars = ['IMP_'+x for x in xvars]
+imp_cats = ['IMP_'+x for x in cats]
+print(imp_xvars)
+print(imp_cats)
+
+# 액션셋 가져오기
+conn.loadActionset('lightgradboost')
+conn.loadActionset('astore')
+
+# lIGHT GBM 적합
+r = conn.lgbmTrain(
+    table = conn.CASTable('hmeq_part_impute').query("_PartInd_= 1"),
+
+    inputs = imp_xvars,
+    nominals = imp_cats + [target], 
+    target = target,
+    
+    boosting ='GOSS',
+    objective = 'BINARY',
+    maxIters = 220,
+
+    validTable = conn.CASTable('hmeq_part_impute').query("_PartInd_= 0"),
+    
+    saveState = {'name':'lgb_model', 'replace':True}
+)
+
+print(r)
+
+# 모델 반복수에 따른 적합도 그래프
+x = r['IterHistory']['numberOfTrees']
+y1 = r['IterHistory']['trainingAccuracyMetric']
+y2 = r['IterHistory']['validationAccuracyMetric']
+
+fig, ax = plt.subplots(dpi=120)
+ax.plot(x, y1, label='Training Accuracy')
+ax.plot(x, y2, label='Validation Accuracy')
+ax.set_xlabel('Iteration')
+ax.legend()
+plt.show()
+
+# 모델 테이블 보기
+conn.CASTable('lgb_model').head()
+
+# 점수 산출
+conn.astore.score(
+    table = conn.CASTable('hmeq_part_impute').query("_PartInd_= 0"),
+    rstore = 'lgb_model',
+    copyvars = imp_xvars + [target],
+    casout ={'name':'lgb_model_score_out', 'replace':True}
+)
+
+# 스코어 정보 보기
+conn.CASTable('lgb_model_score_out').head()
+
+# 모델 저장
+conn.table.save(
+    # 대상
+    table = 'lgb_model',
+    # 저장
+    name='lgb_model', caslib='casuser', replace=True
+)
+
+# 모델 호출
+conn.table.loadtable(
+    # 대상
+    path = 'lgb_model.sashdat', caslib='casuser',
+    # 목적지 정의
+    casout = {'name':'lgb_model', 'caslib':'casuser', 'replace':True}
+)
+
+# 모델 평가 액션셋
+conn.loadactionset('percentile')
+
+r = conn.percentile.assess(
+    # 평가 대상
+    table = 'lgb_model_score_out',
+    
+    # 실제 목표변수
+    response = target,
+    
+    # 예측 변수 지정
+    inputs = [{'name':'P_'+target+'1'}], 
+    
+    
+    # ROC  정보값을 얻기위한 지정
+    
+    # 이벤트 값 지정
+    event = '1',
+    
+    # 이벤트 제외 변수
+    pVar = ['P_'+target+'0'],
+    pEvent = ['0']
+)
+
+# ROC 정보
+r.ROCInfo
+
+# ROC 그래프
+fig, ax = plt.subplots(dpi=300)
+x = r.ROCInfo['FPR']
+y = r.ROCInfo['Sensitivity']
+auc = r.ROCInfo['C'][0]
+ax.plot(x, y, label=f'LGB Model\n AUC: {np.round(auc, 2)}')
+ax.plot([0, 1], [0, 1], color='black', ls='--')
+ax.legend()
+
+# 자동조율 액션셋 로드
+conn.loadactionset("autotune")
+
+tune = conn.tuneLightGradBoost(
+    
+    # 훈련 옵션
+    trainOptions={
+        'table':{'name':'hmeq_part_impute', 'caslib':'casuser', 'where':'_PartInd_=1'},
+        'target':target, 
+        'inputs':imp_xvars, 
+        'nominals':imp_cats + [target]
+    },
+
+ # 조율기 옵션
+    tunerOptions={
+        'seed':123,
+        "searchMethod":"GA",
+        "nCrossValFolds":2,
+        "targetEvent":event, 
+        "objective":"AUC", 
+        # 반복수마다 모델최대조합수
+        "popSize":10,
+        # 반복수
+        "maxIters":5,
+        # 병렬처리 스레드
+        "nParallel":4, 
+        # 목표이벤트 정의
+    },
+    
+    # 자동조율 대상 초모수 및 범위 
+    tuningParameters=[{'name':'maxIters', "initValue":100, "valueList":[100, 200, 300]},
+                      {'name':'m', "initValue":0.5, "valueList":[0.5, 0.6, 0.7]}, # 추출 변수의 비율
+                      {'name':'learningrate', "initvalue":0.05, "lowerBound":0.05, "upperBound":0.1}]
+
+)
+
+# 결과 키 확인
+tune.keys()
+
+# 최적 조합 확인
+tune["BestConfiguration"]
+
+# 결정나무 액션셋 로드
+conn.loadactionset('decisiontree')
+
+rf = conn.decisionTree.forestTrain(
+
+    # 결정나무와 동일한 공통옵션
+    # 훈련 데이터 지정
+    table = {'name':'hmeq_part_impute', 'caslib':'casuser', 'where':'_PartInd_=1'},
+
+    # 입력 변수 지정
+    inputs=imp_xvars,
+
+    # 목표 변수 지정
+    target=target,
+
+    # 범주 변수 지정
+    nominals=imp_cats + [target],
+
+    # 연속 변수의 범주 개수 지정
+    nBins=20,
+
+    # 최소 나무의 크기
+    leafSize=5,
+
+    # 나무의 최대 깊이
+    maxLevel=10,
+
+    # 가지 분기 기준
+    crit="GAIN",
+
+    # 가지 치기 여부
+    prune=True,
+
+    # 변수 중요도 출력 여부
+    varImp=True,
+
+    #
+    # 랜덤 포레스트 초모수
+    #
+    # 씨앗값
+    seed = 123,
+    
+    # 붓스트랩 표본 비율
+    bootstrap=0.6,
+    
+    # 결정나무의 개수
+    nTree=200,
+    
+    # 분기 시에 사용하는 변수의 개수: 기본값은 변수 개수의 제곱근
+    m=7, 
+
+    # 각 노드(잎)에서 예측되는 값: 확률
+    vote="PROB",
+
+    # 가방밖 오차 출력 여부
+    OOB=True,
+
+    # 결과 저장:   ASTORE
+    savestate={"name": "forest_model", "replace": True}
+)
+
+# 변수 중요도 그래프
+fig, ax = plt.subplots(dpi=300)
+
+# 그래프 구성요소 정의
+x = np.arange(len(rf['DTreeVarImpInfo']))
+variable = rf['DTreeVarImpInfo']['Variable']
+importance = rf['DTreeVarImpInfo']['Importance']
+std = rf['DTreeVarImpInfo']['Std']
+width = 0.35
+
+# 그래프
+# ax.bar(x, importance, width, yerr=std)
+ax.bar(x, importance)
+ax.set_xlabel('Variable')
+ax.set_ylabel('Importance')
+ax.set_xticks(x)
+ax.set_title('Variable Importance Plot(GB)')
+ax.set_xticklabels(labels=variable, fontsize=4, rotation=45)
+plt.show()
+
+# XAI 액션셋 불러오기
+conn.loadactionset(actionset="explainModel")
+conn.help(actionset="explainModel")
+
+# 질의 대상 데이터 정의
+conn.CASTable('hmeq_part_impute').head(0).to_csv('hmeq_query.csv')
+
+# 데이터 확인
+!ls -al
+
+# 데이터 올리기
+conn.upload('./hmeq_query.csv', casOut={'name':'hmeq_query', 'replace':True})
+
+# 데이터 확인
+conn.tableinfo()
+
+#  스코어 기준 데이터
+base = conn.CASTable('hmeq_part_impute', where='_PartInd_=0').sample(100)
+
+
+# 기준 데이터 점수 산출
+conn.astore.score(
+    
+    # 스코어 대상
+#     table = {'name': 'claim_part_impute', 'where': '_PartInd_=0'}, 
+    table = base, 
+    
+    # 스코어 모델
+    rstore = 'lgb_model',
+    
+    # 복제할 변수 지정
+    copyVars = imp_xvars + [target],
+    
+    # 점수 결과 테이블
+    casOut = {'name': 'lgb_model_score_out_base', 'replace': True}
+)
+
+# 점수 확인
+conn.CASTable('lgb_model_score_out_base').head()
+
+# HYPER SHAP 모델 적합
+shap = conn.shapleyExplainer(
+    table           = conn.CASTable("lgb_model_score_out_base"),
+    query           = conn.CASTable("hmeq_query"), 
+    modelTable      = {"name" : "lgb_model"},
+    modelTableType  = "ASTORE",
+    inputs = imp_xvars,
+    nominals = imp_cats,
+    predictedTarget = 'P_BAD1',
+    depth           = 1
+ )
+ 
+# 산출물 확인
+shap
+
+# 샤플리 plot
+fig, ax = plt.subplots(dpi=150)
+ax.barh(r_shap['ShapleyValues']['Variable'], r_shap['ShapleyValues']['ShapleyValue'])
+ax.set_title(f"Predicted value for this case: {r_shap['ShapleyValues']['ShapleyValue'].sum().round(4)}")
+plt.show()
+
+
+# 모델 등록 정보
+project = 'hmeq_by_banene'
+model_name = 'LightGB Model'
+lgb_astore = conn.CASTable('lgb_model')
+
+with Session(server, username, password, verify_ssl=False):
+	model = register_model(
+		lgb_astore,
+		model_name,
+		project,
+		force = True
+	)
+	
+	# module = publish_model(model, 'maslocal')
+	# response = module.score(
+	# )
