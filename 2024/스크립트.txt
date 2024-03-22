@@ -1,4 +1,4 @@
-!pip install sasctl
+# !pip install sasctl
 
 # 필요한 패키지
 import swat, os
@@ -20,10 +20,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # 접속하기
-user = 
-password = 
-server = 
-port = 
+user = 'user1'
+password = 'Password12'
+server = 'korts.koreacentral.cloudapp.azure.com'
+port = 443
 
 s = Session(server, user, password, verify_ssl=False)
 conn = s.as_swat()
