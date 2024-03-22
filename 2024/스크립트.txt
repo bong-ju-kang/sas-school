@@ -19,6 +19,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
+# 경고 표시 지우기
+import warnings
+warnings.filterwarnings('ignore')
+
 # 접속하기
 user = 'user1'
 password = 'Password123'
