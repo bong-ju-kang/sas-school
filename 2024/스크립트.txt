@@ -21,7 +21,7 @@ import numpy as np
 
 # 접속하기
 user = 'user1'
-password = 'Password12'
+password = 'Password123'
 server = 'korts.koreacentral.cloudapp.azure.com'
 port = 443
 
