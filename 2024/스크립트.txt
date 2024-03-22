@@ -33,23 +33,25 @@ conn = s.as_swat()
 # 카스 클래스
 type(conn)
 
+r = conn.serverstatus()
+
 # CASResults 클래스의 정체
-isinstance(conn, dict)
+isinstance(r, dict)
 
-[[key, type(value)] for key, value in conn.items()]
+[[key, type(value)] for key, value in r.items()]
 
-for key, value in conn.items():
+for key, value in r.items():
     print(key, type(value))
 	
 # SASDataFrame?
-isinstance(conn['nodestatus'], swat.SASDataFrame), isinstance(conn['nodestatus'], pd.DataFrame)
+isinstance(r['nodestatus'], swat.SASDataFrame), isinstance(r['nodestatus'], pd.DataFrame)
 
 # 카스 라이브러리
 r = conn.table.caslibinfo()
 r
 
 # 활동 라이브러리를 지정해주기
-conn.sessionProp.setSessOpt(caslib='casuser')
+# conn.sessionProp.setSessOpt(caslib='casuser')
 
 # 다른 라이브러리 조회
 conn.table.tableinfo(caslib='Public')
